@@ -86,26 +86,42 @@ export default function App() {
       return;
     }
     setMode("radar");
-    // Starts on the most compact part: it has the most pockets to go to, so the map is most telling.
-    if (job && layout) {
-      const span = (id: number) => {
-        const piece = job.pieces.find((q) => q.id === id);
-        if (!piece) return Infinity;
-        const xs = piece.outer.map((q) => q[0]);
-        const ys = piece.outer.map((q) => q[1]);
-        return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-      };
-      const smallest = layout.reduce((best, p) => (span(p.id) < span(best.id) ? p : best), layout[0]);
-      const piece = job.pieces.find((p) => p.id === smallest.id);
-      setRadarBusy(true);
-      setRadarError(null);
-      setRadarPiece(piece ? { id: smallest.id, name: piece.name } : null);
-      engine
-        ?.radar(job, layout, smallest.id, smallest.rotation_deg)
-        .then(setRadar)
-        .catch((e: Error) => setRadarError(e.message))
-        .finally(() => setRadarBusy(false));
-    }
+    if (!job || !layout || !engine || !length) return;
+    // Opens on whichever small part has the most places to go inside the nest, so the first map
+    // shown is the most telling. Each candidate costs one FFT correlation.
+    const span = (id: number) => {
+      const piece = job.pieces.find((q) => q.id === id);
+      if (!piece) return Infinity;
+      const xs = piece.outer.map((q) => q[0]);
+      const ys = piece.outer.map((q) => q[1]);
+      return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    };
+    const candidates = [...layout].sort((a, b) => span(a.id) - span(b.id)).slice(0, 6);
+    const insideCount = (r: RadarResult) => {
+      const limit = Math.floor((length - r.piece_w) / r.cell_mm) - r.margin + 1;
+      let count = 0;
+      for (let dy = 0; dy < r.rows; dy++) {
+        for (let dx = 0; dx < Math.min(limit, r.cols); dx++) count += r.free[dy * r.cols + dx];
+      }
+      return count;
+    };
+    setRadarBusy(true);
+    setRadarError(null);
+    (async () => {
+      let best: { id: number; result: RadarResult; count: number } | null = null;
+      for (const place of candidates) {
+        const result = await engine.radar(job, layout, place.id, place.rotation_deg);
+        const count = insideCount(result);
+        if (!best || count > best.count) best = { id: place.id, result, count };
+      }
+      if (best) {
+        const piece = job.pieces.find((p) => p.id === best!.id);
+        setRadarPiece(piece ? { id: best.id, name: piece.name } : null);
+        setRadar(best.result);
+      }
+    })()
+      .catch((e: Error) => setRadarError(e.message))
+      .finally(() => setRadarBusy(false));
   };
 
   const download = (kind: "svg" | "gcode") => {

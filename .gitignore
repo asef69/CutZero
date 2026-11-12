@@ -19,3 +19,6 @@ frontend/dist/
 .env
 .claude/
 .vscode/
+
+# Demo video renders (upload to YouTube instead)
+demo/

@@ -701,22 +701,30 @@ function drawInterlocks(ctx: CanvasRenderingContext2D, sprites: Map<number, Spri
 
 function drawRadar(ctx: CanvasRenderingContext2D, state: LiveState, radar: RadarResult) {
   const { rows, cols: allCols, cell_mm: c, margin, free } = radar;
-  // Open roll past the cut-line is trivially free; only pockets inside the nest are interesting.
+  // Open roll past the cut-line is trivially free, so it is drawn faintly; pockets inside the
+  // nest, where the part would fit without lengthening the roll, are drawn bright.
   const limit = state.props.optimizedLength ?? Infinity;
-  const cols = Math.max(0, Math.min(allCols, Math.floor((limit - radar.piece_w) / c) - margin + 1));
-  ctx.fillStyle = "rgba(47,214,160,0.45)";
-  for (let dy = 0; dy < rows; dy++) {
-    let dx = 0;
-    while (dx < cols) {
-      if (!free[dy * allCols + dx]) {
-        dx++;
-        continue;
+  const inside = Math.max(0, Math.min(allCols, Math.floor((limit - radar.piece_w) / c) - margin + 1));
+  const spans = (from: number, to: number, color: string, grow: number) => {
+    ctx.fillStyle = color;
+    for (let dy = 0; dy < rows; dy++) {
+      let dx = from;
+      while (dx < to) {
+        if (!free[dy * allCols + dx]) {
+          dx++;
+          continue;
+        }
+        const start = dx;
+        while (dx < to && free[dy * allCols + dx]) dx++;
+        ctx.fillRect((start + margin) * c - grow, (dy + margin) * c - grow, (dx - start) * c + 2 * grow, c + 2 * grow);
       }
-      const start = dx;
-      while (dx < cols && free[dy * allCols + dx]) dx++;
-      ctx.fillRect((start + margin) * c, (dy + margin) * c, (dx - start) * c, c);
     }
-  }
+  };
+  spans(inside, allCols, "rgba(47,214,160,0.16)", 0);
+  // A grid cell can be under two screen pixels wide, so interior pockets get a halo to stay visible.
+  const halo = Math.max(0, 2.5 / state.scale - c / 2);
+  spans(0, inside, "rgba(47,214,160,0.35)", halo);
+  spans(0, inside, "rgba(110,255,200,0.95)", 0);
   // Ghost of the picked piece, snapped to the offset under the pointer.
   const pointer = state.pointer;
   const id = state.props.radarPieceId;
