@@ -2,7 +2,7 @@
 
 **Track:** Theme Track, Rethinking Waste
 **Repository:** https://github.com/asef69/CutZero
-**Demo video:** _add the YouTube or Vimeo link here_
+**Demo video:** https://youtu.be/81FVRXn1VXo (2:34)
 
 ---
 

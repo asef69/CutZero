@@ -4,8 +4,9 @@
 [![Engine: C++20](https://img.shields.io/badge/Core_Engine-C++20_FFT_%2B_SA-00599C?style=for-the-badge&logo=cplusplus)](#)
 [![Backend: FastAPI](https://img.shields.io/badge/Backend-FastAPI_%2B_uv-009688?style=for-the-badge&logo=fastapi)](#)
 [![Frontend: React + Canvas](https://img.shields.io/badge/Studio-React_%2B_HTML5_Canvas-61DAFB?style=for-the-badge&logo=react)](#)
+[![Demo video](https://img.shields.io/badge/Demo_video-2:34-FF0000?style=for-the-badge&logo=youtube)](https://youtu.be/81FVRXn1VXo)
 
-> **Arbiter Hacks V1, Theme Track ("Rethinking Waste"): impact and measurement statement** (full write-up: [SUBMISSION.md](SUBMISSION.md))
+> **Arbiter Hacks V1, Theme Track ("Rethinking Waste"): impact and measurement statement** (full write-up: [SUBMISSION.md](SUBMISSION.md) · demo video: https://youtu.be/81FVRXn1VXo)
 > Pre-consumer cutting-room scrap is fabric, leather and sheet material thrown away before a product is ever assembled. **CutZero** attacks it at the source by replacing rectangular bounding-box marker layouts with a real-time **C++20 engine** combining **2D FFT cross-correlation, exact vector compaction and simulated annealing**. Every run is measured deterministically against an industry-baseline First-Fit Decreasing (FFD) bounding-box layout of the same parts on the same roll, on three physical metrics: (1) **material utilization** `η = Σ Area(parts) / (roll width × used length)`, (2) **linear and areal roll saved** (`ΔL` in m, `ΔA` in m²), and (3) **solid scrap prevented** `ΔM = ΔA × GSM / 1000` (kg) with the **embodied carbon** it represents (kg CO2e), per production batch. A separate verifier that shares no code with the engine re-checks every layout for overlaps before the numbers are reported.
 
 ---
