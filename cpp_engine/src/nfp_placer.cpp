@@ -26,7 +26,7 @@ double slide_along(const NestingProblem& problem, const PreparedShape& shape,
 // ---------------------------------------------------------------------------
 
 NestingProblem::NestingProblem(std::vector<Piece> pieces, double roll_width_mm, double kerf_mm,
-                               std::vector<double> allowed_rotations_deg)
+                               std::vector<double> allowed_rotations_deg, const std::vector<Polygon2D>& defects)
     : pieces_(std::move(pieces)),
       roll_width_mm_(roll_width_mm),
       kerf_mm_(kerf_mm),
@@ -47,6 +47,15 @@ NestingProblem::NestingProblem(std::vector<Piece> pieces, double roll_width_mm, 
             error_ = "Piece '" + piece.name + "' does not fit across the " +
                      std::to_string(static_cast<int>(roll_width_mm_)) + " mm roll at any allowed rotation.";
         }
+    }
+    for (Polygon2D defect : defects) {
+        if (defect.outer.size() < 3) continue;
+        defect.normalize_winding();
+        Obstacle o;
+        o.shape = PreparedShape::build(defect, 0.0);
+        o.x = -o.shape.norm_x;
+        o.y = -o.shape.norm_y;
+        obstacles_.push_back(std::move(o));
     }
 }
 
@@ -99,6 +108,16 @@ ValidationReport NestingProblem::validate(const Layout& layout) const {
             if (d < kerf_mm_ - tolerance) ++report.violations;
             if (gap < 0.0 && d >= kerf_mm_ - tolerance) ++report.interlocks;
         }
+        // Defects: no part may touch a flaw.
+        for (const Obstacle& o : obstacles_) {
+            const double gap_x = std::max(o.x - (a.x + sa.w), a.x - (o.x + o.shape.w));
+            const double gap_y = std::max(o.y - (a.y + sa.h), a.y - (o.y + o.shape.h));
+            if (std::max(gap_x, gap_y) >= kerf_mm_ + 50.0) continue;
+            ++report.pairs_checked;
+            const double d = shapes_distance(sa, a.x, a.y, o.shape, o.x, o.y);
+            report.min_clearance_mm = std::min(report.min_clearance_mm, d);
+            if (d < kerf_mm_ - tolerance) ++report.violations;
+        }
     }
     if (n == 0) report.min_clearance_mm = 0.0;
     report.valid = report.violations == 0;
@@ -123,6 +142,17 @@ Layout BaselineBoundingBoxPlacer::place(const NestingProblem& problem) {
 
     Layout best;
     best.length_mm = std::numeric_limits<double>::infinity();
+
+    // A bounding box collides with a defect when the boxes come closer than the kerf.
+    const auto& obstacles = problem.obstacles();
+    auto blocker = [&](double x, double y, double w, double h) -> const Obstacle* {
+        for (const Obstacle& o : obstacles) {
+            if (x < o.x + o.shape.w + kerf && o.x < x + w + kerf && y < o.y + o.shape.h + kerf && o.y < y + h + kerf) {
+                return &o;
+            }
+        }
+        return nullptr;
+    };
 
     // Rotation policy: 0 = first allowed, 1 = shortest along the roll, 2 = narrowest across it.
     for (int policy = 0; policy < 3; ++policy) {
@@ -155,19 +185,38 @@ Layout BaselineBoundingBoxPlacer::place(const NestingProblem& problem) {
                 const PreparedShape& s = pieces[i].rotations[rotation[i]];
                 bool done = false;
                 for (Shelf& shelf : shelves) {
-                    if (s.w <= shelf.depth && shelf.filled + s.h + kerf <= width) {
-                        placed.push_back(problem.make_placed(i, rotation[i], shelf.x, shelf.filled));
-                        shelf.filled += s.h + kerf;
+                    if (s.w > shelf.depth) continue;
+                    double y = shelf.filled;
+                    // Step over any defect in this shelf's column.
+                    while (y + s.h + kerf <= width) {
+                        const Obstacle* o = blocker(shelf.x, y, s.w, s.h);
+                        if (o == nullptr) break;
+                        y = o->y + o->shape.h + kerf;
+                    }
+                    if (y + s.h + kerf <= width) {
+                        placed.push_back(problem.make_placed(i, rotation[i], shelf.x, y));
+                        shelf.filled = y + s.h + kerf;
                         done = true;
                         break;
                     }
                 }
                 if (!done) {
-                    Shelf shelf{next_x, s.w, kerf};
-                    placed.push_back(problem.make_placed(i, rotation[i], shelf.x, shelf.filled));
-                    shelf.filled += s.h + kerf;
-                    next_x += s.w + kerf;
-                    shelves.push_back(shelf);
+                    // New shelf: walk across the roll, and past any defect that fills the column.
+                    double x = next_x, y = kerf, column_right = next_x;
+                    for (int guard = 0; guard < 10000; ++guard) {
+                        if (y + s.h + kerf > width) {
+                            x = column_right;
+                            y = kerf;
+                            continue;
+                        }
+                        const Obstacle* o = blocker(x, y, s.w, s.h);
+                        if (o == nullptr) break;
+                        column_right = std::max(column_right, o->x + o->shape.w + kerf);
+                        y = o->y + o->shape.h + kerf;
+                    }
+                    placed.push_back(problem.make_placed(i, rotation[i], x, y));
+                    shelves.push_back(Shelf{x, s.w, y + s.h + kerf});
+                    next_x = x + s.w + kerf;
                 }
             }
             const double length = problem.layout_length(placed);
@@ -192,6 +241,14 @@ FFTGrid::FFTGrid(const NestingProblem& problem, int rows, double horizon_mm) : p
     const auto& pieces = problem.pieces();
     entries_.resize(pieces.size());
     for (std::size_t i = 0; i < pieces.size(); ++i) entries_[i].resize(pieces[i].rotations.size());
+    obstacle_entries_.resize(problem.obstacles().size());
+    std::vector<float> raster;
+    for (std::size_t i = 0; i < obstacle_entries_.size(); ++i) {
+        Entry& e = obstacle_entries_[i];
+        rasterize(problem.obstacles()[i].shape, raster, e.raster_cols, e.raster_rows);
+        fft_->forward(raster.data(), e.spectrum);
+        e.ready = true;
+    }
 }
 
 void FFTGrid::rasterize(const PreparedShape& shape, std::vector<float>& out, int& raster_cols,
@@ -284,6 +341,7 @@ HybridFFTVectorPlacer::HybridFFTVectorPlacer(const NestingProblem& problem, cons
     order_.resize(grid_.rows());
     checkpoints_.resize(problem_.pieces().size() + 1);
     for (Spectrum& s : checkpoints_) s.resize(grid_.fft().spectrum_size());
+    fixed_ = static_cast<int>(problem_.obstacles().size());
 }
 
 void HybridFFTVectorPlacer::reset() {
@@ -292,6 +350,31 @@ void HybridFFTVectorPlacer::reset() {
     extent_ = 0.0;
     std::fill(sheet_.re.begin(), sheet_.re.end(), 0.0f);
     std::fill(sheet_.im.begin(), sheet_.im.end(), 0.0f);
+    // Defects go onto the sheet first, so every FFT scan already sees them as occupied.
+    const double c = grid_.cell_mm();
+    const auto& obstacles = problem_.obstacles();
+    for (int i = 0; i < fixed_; ++i) {
+        const Obstacle& o = obstacles[i];
+        const FFTGrid::Entry& e = grid_.obstacle_entry(i);
+        const int sx = static_cast<int>(std::floor(o.x / c)) - grid_.margin();
+        const int sy = static_cast<int>(std::floor(o.y / c)) - grid_.margin();
+        // A defect past the grid's horizon would wrap around the circular correlation; the exact
+        // vector check still keeps parts clear of it.
+        if (sx + e.raster_cols <= grid_.cols()) grid_.fft().add_shifted_dilated(e.spectrum, sx, sy, sheet_);
+        PlacedPiece p;
+        p.piece_index = -1;
+        p.x = o.x;
+        p.y = o.y;
+        placed_.push_back(p);
+        placed_shapes_.push_back(&o.shape);
+    }
+}
+
+Layout HybridFFTVectorPlacer::pieces_only() const {
+    Layout layout;
+    layout.placed.assign(placed_.begin() + fixed_, placed_.end());
+    layout.length_mm = problem_.layout_length(layout.placed);
+    return layout;
 }
 
 void HybridFFTVectorPlacer::invalidate_from(int from) {
@@ -302,7 +385,7 @@ Layout HybridFFTVectorPlacer::decode(const std::vector<int>& sequence, const std
                                      int first_changed) {
     const int n = static_cast<int>(sequence.size());
     // Longest prefix still described by the checkpoints.
-    int reuse = std::min({first_changed, checkpoints_valid_, static_cast<int>(placed_.size())});
+    int reuse = std::min({first_changed, checkpoints_valid_, static_cast<int>(placed_.size()) - fixed_});
     if (static_cast<int>(last_sequence_.size()) != n) reuse = 0;
     if (reuse > 0) {
         int same = 0;
@@ -316,10 +399,10 @@ Layout HybridFFTVectorPlacer::decode(const std::vector<int>& sequence, const std
     if (reuse == 0) {
         reset();
     } else {
-        placed_.resize(reuse);
-        placed_shapes_.resize(reuse);
+        placed_.resize(fixed_ + reuse);
+        placed_shapes_.resize(fixed_ + reuse);
         extent_ = 0.0;
-        for (int i = 0; i < reuse; ++i) extent_ = std::max(extent_, placed_[i].x + placed_shapes_[i]->w);
+        for (int i = fixed_; i < fixed_ + reuse; ++i) extent_ = std::max(extent_, placed_[i].x + placed_shapes_[i]->w);
         sheet_.re = checkpoints_[reuse].re;
         sheet_.im = checkpoints_[reuse].im;
     }
@@ -332,11 +415,7 @@ Layout HybridFFTVectorPlacer::decode(const std::vector<int>& sequence, const std
     checkpoints_valid_ = n;
     last_sequence_ = sequence;
     last_rotation_ = rotation;
-
-    Layout layout;
-    layout.placed = placed_;
-    layout.length_mm = problem_.layout_length(placed_);
-    return layout;
+    return pieces_only();
 }
 
 Layout HybridFFTVectorPlacer::decode_greedy_rotation(const std::vector<int>& sequence, std::vector<int>& rotation) {
@@ -363,10 +442,7 @@ Layout HybridFFTVectorPlacer::decode_greedy_rotation(const std::vector<int>& seq
         commit(best);
     }
     checkpoints_valid_ = 0;
-    Layout layout;
-    layout.placed = placed_;
-    layout.length_mm = problem_.layout_length(placed_);
-    return layout;
+    return pieces_only();
 }
 
 void HybridFFTVectorPlacer::correlation_map(const std::vector<PlacedPiece>& placed, int piece_index,
@@ -578,7 +654,14 @@ PlacedPiece HybridFFTVectorPlacer::find_position(int piece_index, int rotation_i
         // Nothing free inside the horizon: open fresh roll past the current extent.
         double y = kerf;
         double x = extent_ + kerf;
-        collect_neighbors(shape, x, y, x + shape.w, y + shape.h, near_);
+        // Only a defect can be in the way out here: jump past it.
+        for (int guard = 0; guard < 256; ++guard) {
+            collect_neighbors(shape, x, y, x + shape.w, y + shape.h, near_);
+            if (position_free(shape, x, y, near_)) break;
+            double jump = x;
+            for (int i : near_) jump = std::max(jump, placed_[i].x + placed_shapes_[i]->w + kerf);
+            x = jump;
+        }
         x -= slide(shape, x, y, -1, 0, x - kerf);
         best = problem_.make_placed(piece_index, rotation_index, x, y);
     }
@@ -629,13 +712,23 @@ void compact_layout(const NestingProblem& problem, Layout& layout, int passes) {
     const double kerf = problem.kerf() + kSlack;
     const double wall = problem.roll_width() - kerf;
 
-    std::vector<const PreparedShape*> shapes(layout.placed.size());
-    for (std::size_t i = 0; i < layout.placed.size(); ++i) {
+    const std::size_t real = layout.placed.size();
+    std::vector<const PreparedShape*> shapes(real);
+    for (std::size_t i = 0; i < real; ++i) {
         const PlacedPiece& p = layout.placed[i];
         shapes[i] = &pieces[p.piece_index].rotations[p.rotation_index];
     }
+    // Defects ride along as fixed neighbours for the duration of the compaction.
+    for (const Obstacle& o : problem.obstacles()) {
+        PlacedPiece q;
+        q.piece_index = -1;
+        q.x = o.x;
+        q.y = o.y;
+        layout.placed.push_back(q);
+        shapes.push_back(&o.shape);
+    }
 
-    std::vector<int> order(layout.placed.size());
+    std::vector<int> order(real);
     std::iota(order.begin(), order.end(), 0);
     std::vector<int> near;
 
@@ -691,6 +784,7 @@ void compact_layout(const NestingProblem& problem, Layout& layout, int passes) {
         }
         if (!moved) break;
     }
+    layout.placed.resize(real);
     layout.length_mm = problem.layout_length(layout.placed);
 }
 

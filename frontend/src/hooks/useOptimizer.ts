@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserEngine, EngineClient, RunHandle, detectEngine, jobFromPreset } from "../engine/client";
-import type { CompleteFrame, JobHistory, JobRequest, Placement, Preset, ProgressFrame } from "../types";
+import { defectPolygon } from "../lib/defects";
+import type { CompleteFrame, Defect, JobHistory, JobRequest, Placement, Preset, ProgressFrame } from "../types";
 
 export interface ConvergencePoint {
   iteration: number;
@@ -17,6 +18,8 @@ export interface Settings {
   batch: number;
   rotations: number[];
   iterations: number;
+  /** Flaws marked on the roll; the engine nests around them. */
+  defects: Defect[];
 }
 
 function settingsFrom(preset: Preset): Settings {
@@ -27,6 +30,7 @@ function settingsFrom(preset: Preset): Settings {
     batch: preset.default_batch_count,
     rotations: preset.default_rotations_deg,
     iterations: 200,
+    defects: [],
   };
 }
 
@@ -126,6 +130,7 @@ export function useOptimizer() {
     if (!preset || !settings) return null;
     return {
       ...jobFromPreset(preset),
+      defects: settings.defects.map(defectPolygon),
       roll_width_mm: settings.rollWidth,
       kerf_mm: settings.kerf,
       fabric_gsm: settings.gsm,
@@ -136,7 +141,9 @@ export function useOptimizer() {
   }, [preset, settings]);
 
   // Geometry settings change the baseline itself, so it is recomputed before the next run.
-  const geometryKey = settings ? `${settings.rollWidth}|${settings.kerf}|${settings.rotations.join(",")}` : "";
+  const geometryKey = settings
+    ? `${settings.rollWidth}|${settings.kerf}|${settings.rotations.join(",")}|${JSON.stringify(settings.defects)}`
+    : "";
   const lastKey = useRef("");
   useEffect(() => {
     if (!engine || !job || !preset) return;
@@ -145,7 +152,8 @@ export function useOptimizer() {
     const isDefault =
       settings?.rollWidth === preset.roll_width_mm &&
       settings?.kerf === preset.default_kerf_mm &&
-      settings?.rotations.join() === preset.default_rotations_deg.join();
+      settings?.rotations.join() === preset.default_rotations_deg.join() &&
+      settings?.defects.length === 0;
     lastKey.current = key;
     if (isDefault && preset.baseline_layout) {
       setBaseline({ length: preset.baseline_length_mm!, layout: preset.baseline_layout });
@@ -208,11 +216,14 @@ export function useOptimizer() {
       if (!engine || !settings) return;
       setError(null);
       try {
-        const { name, pieces } = await engine.parseSvg(file);
+        const isDxf = /\.dxf$/i.test(file.name);
+        const { name, pieces } = isDxf
+          ? { name: file.name, pieces: (await import("../lib/dxfParse")).parseDxfInBrowser(await file.text()) }
+          : await engine.parseSvg(file);
         const custom: Preset = {
           id: `custom_${Date.now()}`,
-          name: name.replace(/\.svg$/i, ""),
-          description: "Uploaded SVG pattern.",
+          name: name.replace(/\.(svg|dxf)$/i, ""),
+          description: isDxf ? "Uploaded DXF drawing." : "Uploaded SVG pattern.",
           category: "custom",
           material: "Custom material",
           roll_width_mm: settings.rollWidth,
@@ -233,7 +244,10 @@ export function useOptimizer() {
           }),
         );
         // A roll narrower than the widest part could never hold it; open it up rather than fail.
-        custom.roll_width_mm = Math.max(settings.rollWidth, Math.ceil(tall + 2 * settings.kerf + 10));
+        // A small kit gets a narrower stock width, so the nest is a strip rather than a sliver
+        // across a wide roll. The width stays editable.
+        const fitted = Math.ceil(Math.sqrt(custom.total_area_m2 * 1e6 * 2.5) / 50) * 50;
+        custom.roll_width_mm = Math.max(Math.min(settings.rollWidth, fitted), Math.ceil(tall + 2 * settings.kerf + 10));
         const base = await engine.baseline(jobFromPreset(custom));
         custom.baseline_length_mm = base.length;
         custom.baseline_layout = base.layout;

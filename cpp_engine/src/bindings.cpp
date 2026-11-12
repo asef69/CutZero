@@ -63,6 +63,13 @@ SolverConfig to_config(const py::dict& cfg) {
     if (cfg.contains("time_limit_ms")) c.time_limit_ms = cfg["time_limit_ms"].cast<double>();
     if (cfg.contains("grid_rows")) c.grid_rows = cfg["grid_rows"].cast<int>();
     if (cfg.contains("polish")) c.polish = cfg["polish"].cast<bool>();
+    if (cfg.contains("defects")) {
+        for (const py::handle& defect : cfg["defects"]) {
+            Polygon2D poly;
+            poly.outer = to_ring(defect);
+            if (poly.outer.size() >= 3) c.defects.push_back(std::move(poly));
+        }
+    }
     if (!(c.roll_width_mm > 0.0)) throw std::invalid_argument("roll_width_mm must be positive.");
     if (c.kerf_mm < 0.0) throw std::invalid_argument("kerf_mm must not be negative.");
     return c;
@@ -98,7 +105,7 @@ py::dict validation_to_py(const ValidationReport& v) {
 
 py::dict solve(const py::list& pieces_py, const py::dict& cfg_py, const py::object& callback) {
     SolverConfig cfg = to_config(cfg_py);
-    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) throw std::invalid_argument(problem.error());
 
     SolveResult result;
@@ -163,7 +170,7 @@ py::dict solve(const py::list& pieces_py, const py::dict& cfg_py, const py::obje
 
 py::dict baseline(const py::list& pieces_py, const py::dict& cfg_py) {
     SolverConfig cfg = to_config(cfg_py);
-    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) throw std::invalid_argument(problem.error());
     const Layout layout = BaselineBoundingBoxPlacer::place(problem);
     py::dict out;
@@ -178,7 +185,7 @@ py::dict baseline(const py::list& pieces_py, const py::dict& cfg_py) {
 py::dict radar(const py::list& pieces_py, const py::dict& cfg_py, const py::list& layout_py, int piece_id,
                double rotation_deg) {
     SolverConfig cfg = to_config(cfg_py);
-    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(to_pieces(pieces_py), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) throw std::invalid_argument(problem.error());
     const auto& pieces = problem.pieces();
 
@@ -213,6 +220,7 @@ py::dict radar(const py::list& pieces_py, const py::dict& cfg_py, const py::list
 
     const int p = index_of(piece_id);
     const int r = rotation_index(p, rotation_deg);
+    for (const Obstacle& o : problem.obstacles()) extent = std::max(extent, o.x + o.shape.w);
     const int rows = next_power_of_two(static_cast<int>(std::ceil(cfg.roll_width_mm / 6.0)));
     FFTGrid grid(problem, std::clamp(rows, 32, 256), extent + 400.0);
     for (const PlacedPiece& q : placed) grid.ensure(q.piece_index, q.rotation_index);

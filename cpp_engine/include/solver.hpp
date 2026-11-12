@@ -19,6 +19,8 @@ struct SolverConfig {
     double time_limit_ms = 0.0;  // 0 = no limit.
     int grid_rows = 0;           // 0 = auto. Must be a power of two.
     bool polish = true;
+    // Regions of the roll no part may touch (fabric flaws, damaged sheet), in roll coordinates.
+    std::vector<Polygon2D> defects;
 };
 
 struct ProgressFrame {

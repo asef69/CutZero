@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cutOrder } from "../lib/exports";
 import { familyColors, pointInPiece, ringCentroid } from "../lib/geometry";
-import type { Piece, Placement, Pt, RadarResult } from "../types";
+import type { Defect, Piece, Placement, Pt, RadarResult } from "../types";
 
-export type CanvasMode = "view" | "toolpath" | "radar";
+export type CanvasMode = "view" | "toolpath" | "radar" | "defects";
 
 interface Props {
   pieces: Piece[];
@@ -18,6 +18,10 @@ interface Props {
   showInterlocks: boolean;
   radar: RadarResult | null;
   radarPieceId: number | null;
+  /** Fabric flaws, drawn on both rolls. */
+  defects: Defect[];
+  /** In "defects" mode, a click on either roll adds a flaw there or removes the one under it. */
+  onEditDefect(x: number, y: number): void;
   onPickPiece(id: number, rotationDeg: number): void;
   onToolpathEnd(): void;
   onFps(fps: number): void;
@@ -283,7 +287,17 @@ export function DualRollCanvas(props: Props) {
     }
     const hit = pieceAt(at.strip, at.x, at.y);
     state.hoverId = hit && at.strip === "bottom" ? hit.piece.id : null;
-    if (hit && props.mode !== "radar") {
+    const flaw = props.defects.find((d) => Math.hypot(d.x - at.x, d.y - at.y) <= d.r + 6);
+    if (flaw) {
+      setTooltip({
+        x: at.sx,
+        y: at.sy,
+        title: "Fabric flaw",
+        lines: [`${flaw.r * 2} mm across at ${Math.round(flaw.x)}, ${Math.round(flaw.y)} mm`, props.mode === "defects" ? "click to remove" : "no part may touch it"],
+      });
+    } else if (props.mode === "defects") {
+      setTooltip(null);
+    } else if (hit && props.mode !== "radar") {
       setTooltip({
         x: at.sx,
         y: at.sy,
@@ -303,7 +317,13 @@ export function DualRollCanvas(props: Props) {
   const onPointerUp = (e: React.PointerEvent) => {
     const wasDrag = drag.current?.moved;
     drag.current = null;
-    if (wasDrag || !props.done) return;
+    if (wasDrag) return;
+    if (props.mode === "defects") {
+      const at = worldAt(e.clientX, e.clientY);
+      if (at.strip) props.onEditDefect(at.x, at.y);
+      return;
+    }
+    if (!props.done) return;
     const at = worldAt(e.clientX, e.clientY);
     if (at.strip !== "bottom") return;
     const hit = pieceAt("bottom", at.x, at.y);
@@ -345,7 +365,7 @@ export function DualRollCanvas(props: Props) {
             : `A fabric roll with the bounding-box baseline layout, ${fmt(props.baselineLength)} long.`
         }
         className="block w-full touch-none select-none"
-        style={{ cursor: props.mode === "radar" ? "crosshair" : "default" }}
+        style={{ cursor: props.mode === "radar" || props.mode === "defects" ? "crosshair" : "default" }}
         onPointerMove={onPointerMove}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
@@ -508,7 +528,8 @@ function draw(ctx: CanvasRenderingContext2D, state: LiveState, now: number) {
   };
 
   const ruler = (y: number) => {
-    const major = 500;
+    // Ticks at least ~55 px apart, so labels never collide on a long roll.
+    const major = [500, 1000, 2000, 5000, 10000].find((step) => step * s >= 55) ?? 20000;
     ctx.font = "400 10px 'JetBrains Mono', monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -582,6 +603,7 @@ function draw(ctx: CanvasRenderingContext2D, state: LiveState, now: number) {
         ctx.fill(sprite.path, "evenodd");
       });
     }
+    drawDefects(ctx, p.defects, scale, s, p.mode === "defects");
   });
   if (X(baseLen) <= left + stripW + 1) cutMarker(X(baseLen), topY, "#f0506e", false);
 
@@ -623,6 +645,7 @@ function draw(ctx: CanvasRenderingContext2D, state: LiveState, now: number) {
     if (p.showInterlocks && p.done && p.mode === "view" && p.optimizedLayout) {
       drawInterlocks(ctx, sprites, p.optimizedLayout, scale);
     }
+    drawDefects(ctx, p.defects, scale, s, p.mode === "defects");
     if (p.mode === "radar" && p.radar) drawRadar(ctx, state, p.radar);
     if (state.toolpath) drawToolpath(ctx, state, now, scale);
   });
@@ -673,6 +696,30 @@ function draw(ctx: CanvasRenderingContext2D, state: LiveState, now: number) {
   }
   ruler(bottomY + rollH + 3);
   ruler(topY + rollH + 3);
+}
+
+/** Flaws are drawn in roll millimetres; the X keeps them legible however far the view is zoomed. */
+function drawDefects(ctx: CanvasRenderingContext2D, defects: Defect[], scaleY: number, scaleX: number, editing: boolean) {
+  for (const d of defects) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(d.x, d.y, d.r, d.r, 0, 0, 2 * Math.PI);
+    ctx.fillStyle = editing ? "rgba(255,77,77,0.55)" : "rgba(255,77,77,0.42)";
+    ctx.fill();
+    ctx.lineWidth = 1.6 / scaleY;
+    ctx.strokeStyle = "#ff5a5a";
+    ctx.stroke();
+    const k = d.r * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(d.x - k, d.y - k);
+    ctx.lineTo(d.x + k, d.y + k);
+    ctx.moveTo(d.x + k, d.y - k);
+    ctx.lineTo(d.x - k, d.y + k);
+    ctx.lineWidth = 1.4 / Math.min(scaleX, scaleY);
+    ctx.strokeStyle = "#ffe4e4";
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawInterlocks(ctx: CanvasRenderingContext2D, sprites: Map<number, Sprite>, layout: Placement[], scale: number) {

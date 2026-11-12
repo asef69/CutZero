@@ -166,3 +166,45 @@ def test_exporters_produce_closed_contours():
     first_outline = next(i for i, line in enumerate(lines) if "Fan cut-out plate 1 / outline" in line)
     cutouts = [i for i, line in enumerate(lines) if "Fan cut-out plate 1 / cut-out" in line]
     assert len(cutouts) == 5 and max(cutouts) < first_outline
+
+
+def _run(ws, payload):
+    ws.send_json(payload)
+    while (message := ws.receive_json())["type"] not in ("complete", "error"):
+        pass
+    return message
+
+
+FLAWS = [{"x": 420, "y": 310, "r": 30}, {"x": 1150, "y": 900, "r": 30}, [[1780, 480], [1840, 480], [1840, 560], [1780, 560]]]
+
+
+def test_parts_are_nested_around_fabric_defects(client):
+    with client.websocket_connect("/ws/optimize") as ws:
+        result = _run(ws, {"preset_id": "mens_dress_shirt", "max_iterations": 60, "defects": FLAWS})
+    assert result["type"] == "complete"
+    assert result["verification"]["valid"], result["verification"]["problems"]
+    assert result["verification"]["defects_checked"] == 3
+    assert result["engine_validation"]["violations"] == 0
+    assert len(result["optimized_layout"]) == 28
+
+    # The SVG and DXF mark the flaws so the cutter can see them.
+    svg = client.get(f"/api/jobs/{result['job_id']}/export-svg").text
+    assert 'id="defects-do-not-cut"' in svg
+    dxf = client.get(f"/api/jobs/{result['job_id']}/export-dxf").text
+    assert dxf.count("POLYLINE\n8\nCUT_OUTER\n") == 28 and "DEFECTS" in dxf and dxf.rstrip().endswith("EOF")
+
+
+def test_verifier_flags_a_part_sitting_on_a_flaw(client):
+    preset = {p["id"]: p for p in client.get("/api/presets").json()}["mens_dress_shirt"]
+    layout = preset["baseline_layout"]
+    first = next(p for p in preset["pieces"] if p["id"] == layout[0]["id"])
+    x, y = layout[0]["tx"] + first["outer"][0][0], layout[0]["ty"] + first["outer"][0][1]
+    flaw = [[x - 5, y - 5], [x + 5, y - 5], [x + 5, y + 5], [x - 5, y + 5]]
+    check = verify_layout(preset["pieces"], layout, preset["roll_width_mm"], 2.0, defects=[flaw])
+    assert not check["valid"] and "flaw 1" in check["problems"][0]
+
+
+def test_bad_defects_are_rejected(client):
+    with client.websocket_connect("/ws/optimize") as ws:
+        error = _run(ws, {"preset_id": "mens_dress_shirt", "defects": [{"x": 1, "y": 2}]})
+    assert error["type"] == "error" and "defect" in error["message"]

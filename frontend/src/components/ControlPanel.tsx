@@ -113,9 +113,9 @@ export function ControlPanel(props: Props) {
   const running = status === "running";
   const rotationKey = ROTATIONS.find((r) => r.angles.join() === settings.rotations.join())?.key ?? "quarter";
 
-  const sample = async () => {
-    const response = await fetch(`${import.meta.env.BASE_URL}samples/laser_brackets.svg`);
-    props.onUpload(new File([await response.blob()], "laser_brackets.svg", { type: "image/svg+xml" }));
+  const sample = async (file: string) => {
+    const response = await fetch(`${import.meta.env.BASE_URL}samples/${file}`);
+    props.onUpload(new File([await response.blob()], file));
   };
 
   return (
@@ -171,18 +171,23 @@ export function ControlPanel(props: Props) {
             dragging ? "border-saved bg-ink-850" : "border-ink-600"
           }`}
         >
-          Drop an SVG pattern, or{" "}
+          Drop an SVG or DXF pattern, or{" "}
           <button type="button" className="font-medium text-ink-100 underline underline-offset-2" onClick={() => fileRef.current?.click()}>
             browse
           </button>{" "}
           ·{" "}
-          <button type="button" className="font-medium text-ink-100 underline underline-offset-2" onClick={sample}>
-            try a sample
+          try a sample{" "}
+          <button type="button" className="font-medium text-ink-100 underline underline-offset-2" onClick={() => sample("laser_brackets.svg")}>
+            SVG
+          </button>{" "}
+          or{" "}
+          <button type="button" className="font-medium text-ink-100 underline underline-offset-2" onClick={() => sample("flange_kit.dxf")}>
+            DXF
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".svg,image/svg+xml"
+            accept=".svg,.dxf,image/svg+xml,application/dxf"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];

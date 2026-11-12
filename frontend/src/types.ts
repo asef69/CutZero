@@ -1,5 +1,12 @@
 export type Pt = [number, number];
 
+/** A fabric flaw marked on the roll, in millimetres. */
+export interface Defect {
+  x: number;
+  y: number;
+  r: number;
+}
+
 export interface Piece {
   id: number;
   name: string;
@@ -58,6 +65,7 @@ export interface Verification {
   min_clearance_mm: number | null;
   kerf_mm: number;
   problems: string[];
+  defects_checked?: number;
 }
 
 export interface EngineStats {
@@ -131,6 +139,8 @@ export interface JobRequest {
   allowed_rotations_deg: number[];
   max_iterations: number;
   seed: number;
+  /** Regions no part may touch, as polygons in roll millimetres. */
+  defects: Pt[][];
 }
 
 export interface RadarResult {

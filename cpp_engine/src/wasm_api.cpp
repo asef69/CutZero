@@ -50,7 +50,7 @@ void push_validation(const ValidationReport& v, std::vector<double>& out) {
 }
 
 // Layout: [roll, kerf, iterations, seed, time_limit_ms, n_rot, rot..., n_pieces,
-//          (n_rings, (n_vertices, x, y, ...)...)...]
+//          (n_rings, (n_vertices, x, y, ...)...)..., n_defects, (n_vertices, x, y, ...)...]
 SolverConfig read_problem(Reader& r, std::vector<Piece>& pieces) {
     SolverConfig cfg;
     cfg.roll_width_mm = r.next();
@@ -82,6 +82,16 @@ SolverConfig read_problem(Reader& r, std::vector<Piece>& pieces) {
             }
         }
     }
+    const int defects = r.next_int();
+    for (int i = 0; i < defects; ++i) {
+        Polygon2D poly;
+        poly.outer.resize(r.next_int());
+        for (Point2D& v : poly.outer) {
+            v.x = r.next();
+            v.y = r.next();
+        }
+        if (poly.outer.size() >= 3) cfg.defects.push_back(std::move(poly));
+    }
     return cfg;
 }
 
@@ -105,7 +115,7 @@ __attribute__((export_name("cz_solve"))) int cz_solve(const double* input) {
     Reader reader{input};
     std::vector<Piece> pieces;
     const SolverConfig cfg = read_problem(reader, pieces);
-    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) return 1;
 
     std::vector<double> frame;
@@ -147,7 +157,7 @@ __attribute__((export_name("cz_baseline"))) int cz_baseline(const double* input)
     Reader reader{input};
     std::vector<Piece> pieces;
     const SolverConfig cfg = read_problem(reader, pieces);
-    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) return 1;
     const Layout layout = BaselineBoundingBoxPlacer::place(problem);
     g_output.clear();
@@ -162,7 +172,7 @@ __attribute__((export_name("cz_radar"))) int cz_radar(const double* input) {
     Reader reader{input};
     std::vector<Piece> pieces;
     const SolverConfig cfg = read_problem(reader, pieces);
-    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg);
+    NestingProblem problem(std::move(pieces), cfg.roll_width_mm, cfg.kerf_mm, cfg.allowed_rotations_deg, cfg.defects);
     if (!problem.error().empty()) return 1;
     const auto& parts = problem.pieces();
 
@@ -201,6 +211,7 @@ __attribute__((export_name("cz_radar"))) int cz_radar(const double* input) {
         extent = std::max(extent, x + s.w);
     }
 
+    for (const Obstacle& o : problem.obstacles()) extent = std::max(extent, o.x + o.shape.w);
     const int rows = std::clamp(next_power_of_two(static_cast<int>(std::ceil(cfg.roll_width_mm / 6.0))), 32, 256);
     FFTGrid grid(problem, rows, extent + 400.0);
     for (const PlacedPiece& q : placed) grid.ensure(q.piece_index, q.rotation_index);

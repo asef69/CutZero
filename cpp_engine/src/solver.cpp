@@ -268,6 +268,10 @@ SolveResult SimulatedAnnealingSolver::solve(const NestingProblem& problem, const
         // piece that falls past the horizon is still placed exactly, just without the FFT.
         horizon = std::min(horizon, scout.decode(order, first_rotation).length_mm * 0.98 + 50.0);
     }
+    // A defect that starts inside the horizon must fit in it whole, or its raster would wrap.
+    for (const Obstacle& o : problem.obstacles()) {
+        if (o.x < horizon) horizon = std::max(horizon, o.x + o.shape.w + 40.0);
+    }
 
     FFTGrid grid(problem, rows, horizon);
     grid.ensure_all();

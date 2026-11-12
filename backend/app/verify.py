@@ -107,6 +107,7 @@ def verify_layout(
     roll_width_mm: float,
     kerf_mm: float,
     tolerance_mm: float = 1e-6,
+    defects: Sequence[Sequence[Sequence[float]]] = (),
 ) -> dict[str, Any]:
     by_id = {p["id"]: p for p in pieces}
     placed = [_World(by_id[item["id"]], item) for item in layout]
@@ -143,8 +144,24 @@ def verify_layout(
             if d < kerf_mm - tolerance_mm:
                 problems.append(f"'{a.name}' and '{b.name}' are {d:.3f} mm apart")
 
+    # Fabric flaws are fixed regions of the roll: every part must stay a full kerf away.
+    flaws = [_World({"id": -1 - k, "name": f"flaw {k + 1}", "outer": d}, {"rotation_deg": 0, "tx": 0, "ty": 0})
+             for k, d in enumerate(defects)]
+    for flaw in flaws:
+        for piece in placed:
+            if piece.min_x - flaw.max_x > search or flaw.min_x - piece.max_x > search:
+                continue
+            if piece.min_y - flaw.max_y > search or flaw.min_y - piece.max_y > search:
+                continue
+            pairs_checked += 1
+            d = _pair_distance(piece, flaw, kerf_mm - tolerance_mm)
+            min_clearance = min(min_clearance, d)
+            if d < kerf_mm - tolerance_mm:
+                problems.append(f"'{piece.name}' is {d:.3f} mm from {flaw.name}")
+
     return {
         "valid": not problems,
+        "defects_checked": len(flaws),
         "verifier": "independent pure-Python exact geometry check",
         "pieces_checked": len(placed),
         "pairs_checked": pairs_checked,

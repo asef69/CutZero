@@ -34,8 +34,10 @@ export interface EngineClient {
   baseline(job: JobRequest): Promise<{ length: number; layout: Placement[] }>;
   history(): Promise<JobHistory | null>;
   parseSvg(file: File): Promise<{ name: string; pieces: Piece[] }>;
-  exportUrl(jobId: string, kind: "svg" | "gcode"): string | null;
+  exportUrl(jobId: string, kind: ExportKind): string | null;
 }
+
+export type ExportKind = "svg" | "gcode" | "dxf";
 
 const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
@@ -125,6 +127,7 @@ export class ServerEngine implements EngineClient {
           layout,
           piece_id: pieceId,
           rotation_deg: rotationDeg,
+          defects: job.defects,
         }),
       }),
     );
@@ -144,6 +147,7 @@ export class ServerEngine implements EngineClient {
           roll_width_mm: job.roll_width_mm,
           kerf_mm: job.kerf_mm,
           allowed_rotations_deg: job.allowed_rotations_deg,
+          defects: job.defects,
         }),
       }),
     );
@@ -160,7 +164,7 @@ export class ServerEngine implements EngineClient {
     return jsonOrThrow(await fetch(`${API}/api/parse-svg`, { method: "POST", body: form }));
   }
 
-  exportUrl(jobId: string, kind: "svg" | "gcode"): string {
+  exportUrl(jobId: string, kind: ExportKind): string {
     return `${API}/api/jobs/${jobId}/export-${kind}`;
   }
 }
@@ -187,6 +191,11 @@ function encodeProblem(job: JobRequest, timeLimitMs: number): number[] {
       out.push(ring.length);
       for (const [x, y] of ring) out.push(x, y);
     }
+  }
+  out.push(job.defects.length);
+  for (const ring of job.defects) {
+    out.push(ring.length);
+    for (const [x, y] of ring) out.push(x, y);
   }
   return out;
 }
@@ -340,7 +349,7 @@ export class BrowserEngine implements EngineClient {
         baseline_layout: baseline.layout,
         optimized_layout: rounded,
         engine_validation: engineValidation,
-        verification: verifyLayout(job.pieces, rounded, job.roll_width_mm, job.kerf_mm),
+        verification: verifyLayout(job.pieces, rounded, job.roll_width_mm, job.kerf_mm, job.defects),
         stats,
         cancelled: false,
         ...computeImpact(
@@ -408,6 +417,7 @@ export function jobFromPreset(preset: Preset): JobRequest {
     allowed_rotations_deg: preset.default_rotations_deg,
     max_iterations: 200,
     seed: 42,
+    defects: [],
   };
 }
 

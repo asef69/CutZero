@@ -51,6 +51,7 @@ export function exportSvg(
   length: number,
   utilization: number,
   kerf: number,
+  defects: Pt[][] = [],
 ): string {
   const byId = new Map(pieces.map((p) => [p.id, p]));
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
@@ -68,6 +69,9 @@ export function exportSvg(
     `<g id="cut-paths" fill="none" stroke="#111827" stroke-width="0.5" fill-rule="evenodd">`,
     ...body,
     `</g>`,
+    ...(defects.length
+      ? [`<g id="defects-do-not-cut" fill="#ef4444" fill-opacity="0.35" stroke="#ef4444" stroke-width="0.5">`, ...defects.map((d) => `<path d="${path(d)}"/>`), `</g>`]
+      : []),
     `</svg>`,
     ``,
   ].join("\n");
@@ -128,4 +132,51 @@ export function downloadText(filename: string, text: string, mime: string): void
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/** AutoCAD R12 DXF in millimetres, matching backend/app/exporter.py: closed POLYLINEs on layers
+ *  ROLL, CUT_OUTER, CUT_INNER and DEFECTS, which cutting-room CAM software maps to tools. */
+export function exportDxf(name: string, pieces: Piece[], layout: Placement[], rollWidth: number, length: number, kerf: number, defects: Pt[][] = []): string {
+  const out: string[] = [];
+  const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" && !Number.isInteger(value) ? value.toFixed(3) : String(value));
+  const coord = (code: number, v: number) => out.push(String(code), v.toFixed(3));
+  const polyline = (layer: string, ring: Pt[]) => {
+    pair(0, "POLYLINE");
+    pair(8, layer);
+    pair(66, 1);
+    pair(70, 1);
+    for (const [x, y] of ring) {
+      pair(0, "VERTEX");
+      pair(8, layer);
+      coord(10, x);
+      coord(20, y);
+    }
+    pair(0, "SEQEND");
+    pair(8, layer);
+  };
+  const byId = new Map(pieces.map((p) => [p.id, p]));
+  pair(999, `CutZero nested marker: ${name} | ${length.toFixed(1)} x ${rollWidth.toFixed(1)} mm | kerf ${kerf} mm`);
+  pair(0, "SECTION");
+  pair(2, "HEADER");
+  pair(9, "$INSUNITS");
+  pair(70, 4);
+  pair(9, "$EXTMIN");
+  coord(10, 0);
+  coord(20, 0);
+  pair(9, "$EXTMAX");
+  coord(10, length);
+  coord(20, rollWidth);
+  pair(0, "ENDSEC");
+  pair(0, "SECTION");
+  pair(2, "ENTITIES");
+  polyline("ROLL", [[0, 0], [length, 0], [length, rollWidth], [0, rollWidth]]);
+  for (const pl of layout) {
+    const piece = byId.get(pl.id)!;
+    polyline("CUT_OUTER", worldRing(piece.outer, pl));
+    for (const h of piece.holes) polyline("CUT_INNER", worldRing(h, pl));
+  }
+  for (const d of defects) polyline("DEFECTS", d);
+  pair(0, "ENDSEC");
+  pair(0, "EOF");
+  return out.join("\n") + "\n";
 }

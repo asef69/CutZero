@@ -31,6 +31,14 @@ struct PlacedPiece {
     double ty = 0.0;
 };
 
+// A region of the roll no part may touch, such as a fabric flaw or a damaged area of a sheet.
+// Fixed in roll coordinates: (x, y) is the lower-left of its bounding box.
+struct Obstacle {
+    PreparedShape shape;
+    double x = 0.0;
+    double y = 0.0;
+};
+
 struct Layout {
     std::vector<PlacedPiece> placed;
     double length_mm = 0.0;
@@ -49,13 +57,14 @@ struct ValidationReport {
 class NestingProblem {
 public:
     NestingProblem(std::vector<Piece> pieces, double roll_width_mm, double kerf_mm,
-                   std::vector<double> allowed_rotations_deg);
+                   std::vector<double> allowed_rotations_deg, const std::vector<Polygon2D>& defects = {});
 
     const std::vector<Piece>& pieces() const { return pieces_; }
     double roll_width() const { return roll_width_mm_; }
     double kerf() const { return kerf_mm_; }
     double total_area_mm2() const { return total_area_mm2_; }
     const std::vector<double>& allowed_rotations() const { return rotations_; }
+    const std::vector<Obstacle>& obstacles() const { return obstacles_; }
 
     // Empty when every piece has at least one rotation that fits; otherwise explains why not.
     const std::string& error() const { return error_; }
@@ -70,6 +79,7 @@ private:
     double kerf_mm_;
     double total_area_mm2_ = 0.0;
     std::vector<double> rotations_;
+    std::vector<Obstacle> obstacles_;
     std::string error_;
 };
 
@@ -105,6 +115,8 @@ public:
     const Entry& entry(int piece_index, int rotation_index) const {
         return entries_[piece_index][rotation_index];
     }
+    // Spectrum of each obstacle, computed when the grid is built.
+    const Entry& obstacle_entry(int index) const { return obstacle_entries_[index]; }
 
     // Raster of a shape at a whole-cell offset, into a rows*cols buffer. Exposed for tests.
     void rasterize(const PreparedShape& shape, std::vector<float>& out, int& raster_cols, int& raster_rows) const;
@@ -117,6 +129,7 @@ private:
     int margin_;
     std::unique_ptr<RealFFT2D> fft_;
     std::vector<std::vector<Entry>> entries_;
+    std::vector<Entry> obstacle_entries_;
 };
 
 struct PlacerStats {
@@ -171,6 +184,10 @@ private:
     const NestingProblem& problem_;
     const FFTGrid& grid_;
 
+    Layout pieces_only() const;
+
+    // placed_ starts with one fixed entry per obstacle (piece_index -1), then the real pieces.
+    int fixed_ = 0;
     std::vector<PlacedPiece> placed_;
     std::vector<const PreparedShape*> placed_shapes_;
     double extent_ = 0.0;

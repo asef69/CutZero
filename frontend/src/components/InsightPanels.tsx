@@ -75,6 +75,7 @@ export function VerificationCard({ complete }: { complete: CompleteFrame | null 
         <Row label="Parts checked" value={String(v.pieces_checked)} />
         <Row label="Close pairs measured" value={String(v.pairs_checked)} />
         <Row label="Interlocked pairs" value={String(complete.engine_validation.interlocks)} />
+        {(v.defects_checked ?? 0) > 0 && <Row label="Fabric flaws avoided" value={String(v.defects_checked)} />}
       </dl>
       {v.problems.length > 0 && (
         <ul className="mt-1 list-disc pl-4 text-xs text-waste">
@@ -212,7 +213,7 @@ export function ImpactPanel({
   );
 }
 
-export function HistoryPanel({ history, exportUrl }: { history: JobHistory | null; exportUrl(id: string, kind: "svg" | "gcode"): string | null }) {
+export function HistoryPanel({ history, exportUrl }: { history: JobHistory | null; exportUrl(id: string, kind: "svg" | "gcode" | "dxf"): string | null }) {
   if (!history) {
     return (
       <p className="text-xs text-ink-400">

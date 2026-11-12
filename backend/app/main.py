@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -19,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import database
-from .exporter import export_gcode, export_svg
+from .exporter import export_dxf, export_gcode, export_svg
 from .impact import CO2_FACTOR_ALUMINIUM, CO2_FACTOR_TEXTILE, compute_impact
 from .presets import all_presets
 from .svg_parser import SvgParseError, parse_svg
@@ -149,6 +150,15 @@ def job_export_svg(job_id: str) -> Response:
     )
 
 
+@app.get("/api/jobs/{job_id}/export-dxf")
+def job_export_dxf(job_id: str) -> PlainTextResponse:
+    return PlainTextResponse(
+        export_dxf(_load_job(job_id)),
+        media_type="application/dxf",
+        headers={"Content-Disposition": f'attachment; filename="cutzero-{job_id[:8]}.dxf"'},
+    )
+
+
 @app.get("/api/jobs/{job_id}/export-gcode")
 def job_export_gcode(job_id: str, feed_mm_min: float = 3000.0) -> PlainTextResponse:
     return PlainTextResponse(
@@ -157,23 +167,52 @@ def job_export_gcode(job_id: str, feed_mm_min: float = 3000.0) -> PlainTextRespo
     )
 
 
+MAX_DEFECTS = 50
+
+
+def parse_defects(raw: Any) -> list[list[list[float]]]:
+    """Fabric flaws as polygons in roll millimetres. Accepts point lists or {x, y, r} circles."""
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_DEFECTS:
+        raise JobError(f"defects must be a list of at most {MAX_DEFECTS} regions.")
+    out = []
+    for item in raw:
+        try:
+            if isinstance(item, dict):
+                x, y, r = float(item["x"]), float(item["y"]), float(item["r"])
+                if not (0 < r <= 2000):
+                    raise ValueError
+                ring = [[x + r * math.cos(2 * math.pi * k / 24), y + r * math.sin(2 * math.pi * k / 24)] for k in range(24)]
+            else:
+                ring = [[float(p[0]), float(p[1])] for p in item]
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise JobError("Each defect is a list of [x, y] points or an {x, y, r} circle in mm.") from exc
+        if not 3 <= len(ring) <= 500 or not all(math.isfinite(v) for p in ring for v in p):
+            raise JobError("Each defect needs 3 to 500 finite points.")
+        out.append(ring)
+    return out
+
+
 class BaselineRequest(BaseModel):
     pieces: list[dict[str, Any]] = Field(max_length=MAX_PIECES)
     roll_width_mm: float = Field(gt=0)
     kerf_mm: float = Field(ge=0, le=50)
     allowed_rotations_deg: list[float] = Field(min_length=1, max_length=72)
+    defects: list[Any] = Field(default_factory=list, max_length=MAX_DEFECTS)
 
 
 @app.post("/api/baseline")
 def baseline_layout(req: BaselineRequest) -> dict[str, Any]:
     """First-Fit Decreasing layout for settings the built-in presets don't cover."""
     engine = _require_core()
-    cfg = {
-        "roll_width_mm": req.roll_width_mm,
-        "kerf_mm": req.kerf_mm,
-        "allowed_rotations_deg": req.allowed_rotations_deg,
-    }
     try:
+        cfg = {
+            "roll_width_mm": req.roll_width_mm,
+            "kerf_mm": req.kerf_mm,
+            "allowed_rotations_deg": req.allowed_rotations_deg,
+            "defects": parse_defects(req.defects),
+        }
         result = engine.baseline(req.pieces, cfg)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -189,18 +228,20 @@ class RadarRequest(BaseModel):
     layout: list[dict[str, Any]] = Field(max_length=MAX_PIECES)
     piece_id: int
     rotation_deg: float
+    defects: list[Any] = Field(default_factory=list, max_length=MAX_DEFECTS)
 
 
 @app.post("/api/radar")
 async def radar(req: RadarRequest) -> dict[str, Any]:
     """Runs one real FFT correlation and returns every free offset for the chosen piece."""
     engine = _require_core()
-    cfg = {
-        "roll_width_mm": req.roll_width_mm,
-        "kerf_mm": req.kerf_mm,
-        "allowed_rotations_deg": req.allowed_rotations_deg,
-    }
     try:
+        cfg = {
+            "roll_width_mm": req.roll_width_mm,
+            "kerf_mm": req.kerf_mm,
+            "allowed_rotations_deg": req.allowed_rotations_deg,
+            "defects": parse_defects(req.defects),
+        }
         result = await asyncio.to_thread(engine.radar, req.pieces, cfg, req.layout, req.piece_id, req.rotation_deg)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -265,6 +306,7 @@ def _resolve_job(msg: dict[str, Any]) -> dict[str, Any]:
         "allowed_rotations_deg": rotations,
         "co2_factor": number("co2_factor_kg_per_kg", default_factor, 0, 1000),
         "seed": seed,
+        "defects": parse_defects(msg.get("defects")),
     }
 
 
@@ -313,6 +355,7 @@ async def _run_job(ws: WebSocket, job: dict[str, Any]) -> None:
         "max_iterations": job["max_iterations"],
         "seed": job["seed"],
         "time_limit_ms": MAX_SOLVE_SECONDS * 1000.0,
+        "defects": job["defects"],
     }
 
     try:
@@ -372,6 +415,7 @@ async def _run_job(ws: WebSocket, job: dict[str, Any]) -> None:
             "baseline_length_mm": baseline_length,
             "baseline_layout": baseline_layout,
             "total_area_m2": total_area / 1e6,
+            "defects": job["defects"],
             "busy": _solve_slots.locked(),
         }
     )
@@ -432,8 +476,8 @@ def _finish_job(
     impact = impact_for(length)
     # Checked against the rounded coordinates that actually get exported and stored, not the
     # engine's internal doubles. The engine's 2 micron slack absorbs the rounding.
-    check = verify_layout(job["pieces"], optimized, job["roll_width_mm"], job["kerf_mm"])
-    stats = result["stats"]
+    check = verify_layout(job["pieces"], optimized, job["roll_width_mm"], job["kerf_mm"], defects=job["defects"])
+    stats = {**result["stats"], "defects": job["defects"]}
 
     job_id = None
     if not stats["cancelled"]:

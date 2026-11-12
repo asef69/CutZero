@@ -161,6 +161,11 @@ export function parseSvgInBrowser(text: string): Piece[] {
     host.remove();
   }
 
+  return piecesFromRings(rings);
+}
+
+/** Closed rings (any winding, any order) to pieces: rings inside an odd number of others are holes. */
+export function piecesFromRings(rings: { name: string; ring: Pt[] }[]): Piece[] {
   const cleaned = rings
     .map(({ name, ring }) => ({ name, ring: toBudget(ring) }))
     .filter(({ ring }) => ring.length >= 3 && Math.abs(signedArea(ring)) >= 1);

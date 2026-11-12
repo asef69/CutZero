@@ -34,6 +34,8 @@ Industry baseline vs. CutZero, 100-lay batch, kerf 2 mm, 200 iterations, seed 42
 
 With `--iterations 1000` the shirt reaches **79.9%** (+19.4 points) in about 8 s. Minimum part-to-part gap in every layout: 2.001 to 2.002 mm against a 2 mm kerf.
 
+**With fabric flaws.** The test bench also nests the shirt around three 60 mm flaws: the baseline needs 3,990.9 mm (50.5%) and CutZero 2,837.2 mm (71.0%), with every part at least 2.002 mm from every flaw.
+
 **What the comparison is, and isn't.** The baseline is the best of nine First-Fit Decreasing shelf-packing variants on bounding boxes (three rotation policies × three sort orders), under the same kerf and rotation rules. It represents simple nesting and manual box-style layouts. Commercial marker software (Lectra, Gerber, SigmaNEST) will do better than this baseline, so these gains do not measure CutZero against those products. The garment presets lock rotation to 0/180°, as real cutting rooms do to respect the fabric grain.
 
 ### Engine checks (`test_bench`)
@@ -53,13 +55,15 @@ With `--iterations 1000` the shirt reaches **79.9%** (+19.4 points) in about 8 s
 
 - **Dual-roll live comparison studio.** The top roll shows the baseline with crimson bounding boxes; the bottom roll animates the live C++ search, with an emerald cut-line and a hatched **saved material zone**.
 - **Live telemetry.** Utilization, linear roll saved, scrap prevented and carbon avoided, plus a convergence chart (roll length vs. iteration) and engine stats (FFT ms, decode ms, grid, chains, canvas fps).
+- **Fabric flaws.** Click either roll to mark holes, stains or slubs, or scatter sample flaws. Flaws are obstacles inside the engine: they are on the FFT sheet before any part is placed, and the exact checks, compaction and the baseline all keep a full kerf away from them.
 - **FFT radar.** Click any part after a run to see every position where it fits, computed by a real FFT correlation, and hover to preview it at any spot.
 - **Interlock highlights.** Amber marks where bounding boxes overlap while the parts stay clear, which a box packer can never produce.
 - **CNC toolpath preview.** Animates the actual cut order: interior cut-outs before outlines, nearest-neighbour rapids.
-- **Production exports.** True-scale nested `.svg` and `G00`/`G01` `.gcode` with cut length, rapid travel and time estimates.
-- **Custom SVG upload.** Paths (every command, including arcs), polygons, polylines, rects, circles and ellipses, with nested transforms and physical units. Rings inside rings become holes. Parsed with `defusedxml`.
-- **Independent verification.** A pure-Python (server) or TypeScript (browser) checker rebuilds every part from the raw input and measures clearance from scratch.
-- **Runs with or without a server.** The same C++ source compiles to a 169 KB WebAssembly module, so the studio still works as a static site; it falls back to WASM automatically if no server answers.
+- **Production exports.** True-scale nested `.svg`, AutoCAD R12 `.dxf` (layers `CUT_OUTER`, `CUT_INNER`, `DEFECTS`, `ROLL`, in mm) for cutting-room CAM, and `G00`/`G01` `.gcode` with cut length, rapid travel and time estimates.
+- **Impact report.** One click opens a printable one-page report: both markers to scale, the savings per lay and per batch, and the verification result.
+- **Custom SVG and DXF upload.** SVG paths (every command, including arcs), polygons, polylines, rects, circles and ellipses, with nested transforms and physical units, parsed with `defusedxml`. DXF `LWPOLYLINE`/`POLYLINE` with bulge arcs, `CIRCLE`, `ELLIPSE`, `BLOCK`/`INSERT` (as AAMA/ASTM pattern files use), and loose `LINE`/`ARC` segments chained into closed outlines. Rings inside rings become holes.
+- **Independent verification.** A pure-Python (server) or TypeScript (browser) checker rebuilds every part from the raw input and measures clearance from scratch, to every other part and to every flaw.
+- **Runs with or without a server.** The same C++ source compiles to a 175 KB WebAssembly module, so the studio still works as a static site; it falls back to WASM automatically if no server answers.
 - **Scale to a factory.** Turns one run's measured saving into annual material, scrap, carbon and cost using the user's own assumptions, clearly labelled as a projection.
 - **Run history** in PostgreSQL, with automatic SQLite fallback.
 
@@ -87,8 +91,8 @@ CutZero/
 │   │   ├── main.py              # REST + WS /ws/optimize, serves the built studio
 │   │   ├── presets.py           # 3 parametric industrial datasets (Bezier curves, mm)
 │   │   ├── svg_parser.py        # Bezier/arc sampler, Douglas-Peucker, hole detection
-│   │   ├── exporter.py          # Nested SVG + CNC G-code
-│   │   ├── verify.py            # Independent pure-Python layout verifier
+│   │   ├── exporter.py          # Nested SVG, R12 DXF + CNC G-code
+│   │   ├── verify.py            # Independent pure-Python layout verifier (parts and flaws)
 │   │   ├── impact.py            # The PRD's waste formulas
 │   │   └── database.py          # Run history
 │   └── tests/test_api.py
@@ -97,8 +101,8 @@ CutZero/
 │   └── src/
 │       ├── components/          # DualRollCanvas, TelemetryBar, ControlPanel, ConvergenceChart, InsightPanels
 │       ├── engine/              # Server (WebSocket) and browser (WASM worker) engine clients
-│       └── lib/                 # Impact, verifier, exporters, browser SVG import
-├── scripts/                     # build_cpp.py, benchmark.py
+│       └── lib/                 # Impact, verifier, exporters, report, flaws, browser SVG + DXF import
+├── scripts/                     # build_cpp.py, benchmark.py, docker_smoke.py, make_sample_dxf.py
 ├── Dockerfile                   # One image: engine + studio + API
 └── docker-compose.yml           # App + PostgreSQL
 ```
@@ -109,11 +113,11 @@ CutZero/
 |---|---|
 | `GET /api/presets` | Presets with geometry and their baseline layout |
 | `POST /api/parse-svg` | Multipart `.svg` upload → normalised polygons |
-| `POST /api/baseline` | FFD baseline for custom settings |
-| `POST /api/radar` | One FFT correlation: free-position map for a part |
+| `POST /api/baseline` | FFD baseline for custom settings (optional `defects`) |
+| `POST /api/radar` | One FFT correlation: free-position map for a part (optional `defects`) |
 | `GET /api/jobs`, `GET /api/jobs/{id}` | Run history and aggregates |
-| `GET /api/jobs/{id}/export-svg` / `export-gcode` | Production files |
-| `WS /ws/optimize` | Send the PRD's `start_job` payload; receive `start`, `progress`… and `complete` frames. Send `{"type":"stop"}` to end early. |
+| `GET /api/jobs/{id}/export-svg` / `export-dxf` / `export-gcode` | Production files |
+| `WS /ws/optimize` | Send the PRD's `start_job` payload; receive `start`, `progress`… and `complete` frames. Send `{"type":"stop"}` to end early. Add `"defects": [{"x": 420, "y": 310, "r": 30}, [[x, y], …]]` (circles or polygons in mm) to nest around flaws. |
 
 ---
 
@@ -169,4 +173,4 @@ Then open `http://localhost:5173`. Run the API tests with `uv run pytest` from `
 - Carbon factors are the project's stated values: 15.2 kg CO2e/kg for woven textiles and 11.5 kg CO2e/kg for sheet aluminium.
 - "Scrap prevented" is the roll no longer consumed per lay, multiplied by the batch size. It assumes the saved length would otherwise have become offcut.
 - Presets are parametric approximations of real patterns, built to be realistic in shape and size, not copies of any brand's patterns.
-- Parts are placed with whole-polygon kerf clearance. Common-line cutting, grain tolerance and fabric defects are out of scope.
+- Parts are placed with whole-polygon kerf clearance. Common-line cutting and grain tolerance are out of scope. Fabric flaws are marked by hand (circles or polygons); reading them from roll-inspection cameras is not built.

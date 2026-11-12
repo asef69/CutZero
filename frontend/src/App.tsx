@@ -5,7 +5,9 @@ import { CanvasMode, DualRollCanvas } from "./components/DualRollCanvas";
 import { EngineCard, HistoryPanel, HowItWorks, ImpactPanel, MethodNote, VerificationCard } from "./components/InsightPanels";
 import { TelemetryBar } from "./components/TelemetryBar";
 import { useOptimizer } from "./hooks/useOptimizer";
-import { downloadText, exportGcode, exportSvg } from "./lib/exports";
+import { sampleDefects, toggleDefect } from "./lib/defects";
+import { downloadText, exportDxf, exportGcode, exportSvg } from "./lib/exports";
+import { openReport } from "./lib/report";
 import type { RadarResult } from "./types";
 
 function ToolButton({ active, disabled, onClick, children, title }: { active?: boolean; disabled?: boolean; onClick(): void; children: React.ReactNode; title?: string }) {
@@ -41,14 +43,15 @@ export default function App() {
   const layout = frame?.optimized_layout ?? null;
   const length = frame?.optimized_length_mm ?? null;
 
-  // Leaving the finished state returns the canvas to its normal view.
+  // Leaving the finished state returns the canvas to its normal view; marking flaws survives
+  // the baseline being recomputed after each one, and ends when a run starts.
   useEffect(() => {
     if (!done) {
-      setMode("view");
+      setMode((m) => (m === "defects" && !running ? m : "view"));
       setRadar(null);
       setRadarPiece(null);
     }
-  }, [done]);
+  }, [done, running]);
 
   // Links like ?autorun=1 start immediately, which is handy for a judge's bookmark or a demo video.
   const autorun = useRef(new URLSearchParams(location.search).has("autorun"));
@@ -124,7 +127,7 @@ export default function App() {
       .finally(() => setRadarBusy(false));
   };
 
-  const download = (kind: "svg" | "gcode") => {
+  const download = (kind: "svg" | "gcode" | "dxf") => {
     if (!complete || !job) return;
     const url = complete.job_id ? engine?.exportUrl(complete.job_id, kind) : null;
     if (url) {
@@ -138,9 +141,11 @@ export default function App() {
     if (kind === "svg") {
       downloadText(
         `${base}.svg`,
-        exportSvg(job.name, job.pieces, complete.optimized_layout, job.roll_width_mm, complete.optimized_length_mm, complete.optimized_utilization_pct, job.kerf_mm),
+        exportSvg(job.name, job.pieces, complete.optimized_layout, job.roll_width_mm, complete.optimized_length_mm, complete.optimized_utilization_pct, job.kerf_mm, job.defects),
         "image/svg+xml",
       );
+    } else if (kind === "dxf") {
+      downloadText(`${base}.dxf`, exportDxf(job.name, job.pieces, complete.optimized_layout, job.roll_width_mm, complete.optimized_length_mm, job.kerf_mm, job.defects), "application/dxf");
     } else {
       downloadText(
         `${base}.gcode`,
@@ -165,7 +170,9 @@ export default function App() {
     );
   }
 
-  const baselineUtil = (100 * preset.total_area_m2 * 1e6) / (settings.rollWidth * baseline.length);
+  const partsArea = (job ?? preset).pieces.reduce((t, p) => t + p.area_mm2, 0);
+  const baselineUtil = (100 * partsArea) / (settings.rollWidth * baseline.length);
+  const editDefect = (x: number, y: number) => o.setSettings({ ...settings, defects: toggleDefect(settings.defects, x, y, settings.rollWidth) });
 
   return (
     <div className="mx-auto max-w-[1680px] px-4 pb-10 pt-3 lg:px-5">
@@ -212,7 +219,7 @@ export default function App() {
 
           <div className="panel p-2">
             <DualRollCanvas
-              pieces={preset.pieces}
+              pieces={job?.pieces ?? preset.pieces}
               rollWidth={settings.rollWidth}
               baselineLayout={baseline.layout}
               baselineLength={baseline.length}
@@ -224,6 +231,8 @@ export default function App() {
               showInterlocks={interlocks}
               radar={radar}
               radarPieceId={radarPiece?.id ?? null}
+              defects={settings.defects}
+              onEditDefect={editDefect}
               onPickPiece={pick}
               onToolpathEnd={() => setMode("view")}
               onFps={setFps}
@@ -238,14 +247,47 @@ export default function App() {
               <ToolButton disabled={!done} active={interlocks} onClick={() => setInterlocks((v) => !v)} title="Highlight where bounding boxes overlap while the parts themselves stay clear">
                 Interlocks
               </ToolButton>
-              <span className="min-w-2 flex-1" />
-              <ToolButton disabled={!complete} onClick={() => download("svg")}>
-                Download nested SVG
+              <ToolButton
+                disabled={running}
+                active={mode === "defects"}
+                onClick={() => setMode(mode === "defects" ? "view" : "defects")}
+                title="Click the roll to mark flaws (holes, stains, slubs) that no part may touch"
+              >
+                {mode === "defects" ? "Done marking" : `Fabric flaws${settings.defects.length ? ` (${settings.defects.length})` : ""}`}
               </ToolButton>
-              <ToolButton disabled={!complete} onClick={() => download("gcode")}>
-                Export CNC G-code
+              <span className="min-w-2 flex-1" />
+              <ToolButton disabled={!complete} onClick={() => download("svg")} title="True-scale nested marker">
+                SVG
+              </ToolButton>
+              <ToolButton disabled={!complete} onClick={() => download("dxf")} title="AutoCAD R12 DXF with cut, cut-out and flaw layers, for cutting-room CAM">
+                DXF
+              </ToolButton>
+              <ToolButton disabled={!complete} onClick={() => download("gcode")} title="G00/G01 toolpath, inner cuts first">
+                G-code
+              </ToolButton>
+              <ToolButton disabled={!complete} onClick={() => complete && job && openReport(job, complete, engine.label)} title="One-page report for the production manager: both markers, savings, verification">
+                Impact report
               </ToolButton>
             </div>
+            {mode === "defects" && (
+              <div className="flex flex-wrap items-center gap-2 px-2 pb-1 pt-2 text-xs text-ink-300">
+                <span>
+                  Click either roll to mark a flaw, or click a flaw to remove it. Both layouts are rebuilt to keep every part a full kerf away from each one.
+                </span>
+                <button
+                  type="button"
+                  className="font-medium text-ink-100 underline underline-offset-2"
+                  onClick={() => o.setSettings({ ...settings, defects: sampleDefects(baseline.length * 0.8, settings.rollWidth) })}
+                >
+                  Scatter 4 sample flaws
+                </button>
+                {settings.defects.length > 0 && (
+                  <button type="button" className="font-medium text-ink-100 underline underline-offset-2" onClick={() => o.setSettings({ ...settings, defects: [] })}>
+                    Clear all
+                  </button>
+                )}
+              </div>
+            )}
             {mode === "radar" && (
               <p className="px-2 pb-1 pt-2 text-xs text-ink-300">
                 {radarError ? (

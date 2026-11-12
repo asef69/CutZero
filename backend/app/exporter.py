@@ -1,4 +1,4 @@
-"""Production outputs: a scaled nested SVG marker and a G00/G01 CNC toolpath."""
+"""Production outputs: a true-scale SVG marker, an R12 DXF for CAD/CAM, and a G00/G01 CNC toolpath."""
 
 from __future__ import annotations
 
@@ -48,7 +48,13 @@ def export_svg(job: dict[str, Any]) -> str:
             f'<path id="piece-{piece["id"]}" data-name={quoteattr(piece.get("name", ""))} '
             f'data-rotation="{place["rotation_deg"]:g}" d="{data}"/>'
         )
-    parts += ["</g>", "</svg>"]
+    parts.append("</g>")
+    defects = (job.get("stats") or {}).get("defects") or []
+    if defects:
+        parts.append('<g id="defects-do-not-cut" fill="#ef4444" fill-opacity="0.35" stroke="#ef4444" stroke-width="0.5">')
+        parts += [f'<path d="{_ring_path([(p[0], p[1]) for p in d])}"/>' for d in defects]
+        parts.append("</g>")
+    parts.append("</svg>")
     return "\n".join(parts) + "\n"
 
 
@@ -111,3 +117,54 @@ def export_gcode(job: dict[str, Any], feed_mm_min: float = 3000.0, rapid_mm_min:
     ]
     footer = ["G00 X0.000 Y0.000", "M05", "M30 ; end of program"]
     return "\n".join(header + body + footer) + "\n"
+
+
+def export_dxf(job: dict[str, Any]) -> str:
+    """AutoCAD R12 DXF in millimetres: one closed POLYLINE per contour, on layers a cutting-room
+    CAM package can map to tools (outer cuts, inner cut-outs, roll boundary, defects)."""
+    out: list[str] = []
+
+    def pair(code: int, value: Any) -> None:
+        out.append(str(code))
+        out.append(f"{value:.3f}" if isinstance(value, float) else str(value))
+
+    def polyline(layer: str, ring: Sequence[Sequence[float]]) -> None:
+        pair(0, "POLYLINE")
+        pair(8, layer)
+        pair(66, 1)
+        pair(70, 1)  # closed
+        for x, y in ring:
+            pair(0, "VERTEX")
+            pair(8, layer)
+            pair(10, float(x))
+            pair(20, float(y))
+        pair(0, "SEQEND")
+        pair(8, layer)
+
+    length, width = job["optimized_length_mm"], job["roll_width_mm"]
+    pair(999, f"CutZero nested marker: {job['name']} | {length:.1f} x {width:.1f} mm | kerf {job['kerf_mm']} mm")
+    pair(0, "SECTION")
+    pair(2, "HEADER")
+    pair(9, "$INSUNITS")
+    pair(70, 4)  # millimetres
+    pair(9, "$EXTMIN")
+    pair(10, 0.0)
+    pair(20, 0.0)
+    pair(9, "$EXTMAX")
+    pair(10, float(length))
+    pair(20, float(width))
+    pair(0, "ENDSEC")
+    pair(0, "SECTION")
+    pair(2, "ENTITIES")
+    polyline("ROLL", [(0.0, 0.0), (length, 0.0), (length, width), (0.0, width)])
+    by_id = {p["id"]: p for p in job["pieces"]}
+    for place in job["optimized_layout"]:
+        outer, holes = world_rings(by_id[place["id"]], place)
+        polyline("CUT_OUTER", outer)
+        for hole in holes:
+            polyline("CUT_INNER", hole)
+    for defect in (job.get("stats") or {}).get("defects") or []:
+        polyline("DEFECTS", defect)
+    pair(0, "ENDSEC")
+    pair(0, "EOF")
+    return "\n".join(out) + "\n"

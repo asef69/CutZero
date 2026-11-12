@@ -35,7 +35,7 @@ function inRing(p: Pt, ring: Pt[]): boolean {
   return inside;
 }
 
-export function verifyLayout(pieces: Piece[], layout: Placement[], rollWidth: number, kerf: number): Verification {
+export function verifyLayout(pieces: Piece[], layout: Placement[], rollWidth: number, kerf: number, defects: Pt[][] = []): Verification {
   const byId = new Map(pieces.map((p) => [p.id, p]));
   const placed = layout.map((pl) => {
     const piece = byId.get(pl.id)!;
@@ -83,8 +83,26 @@ export function verifyLayout(pieces: Piece[], layout: Placement[], rollWidth: nu
       if (d < kerf - tolerance) problems.push(`'${a.piece.name}' and '${b.piece.name}' are ${d.toFixed(3)} mm apart`);
     }
   }
+  // Fabric flaws: fixed regions every part must clear by the full kerf.
+  defects.forEach((flaw, k) => {
+    const box = ringBounds(flaw);
+    const edges: [Pt, Pt][] = flaw.map((pt, i) => [pt, flaw[(i + 1) % flaw.length]]);
+    for (const w of placed) {
+      const gap = Math.max(box.minX - w.box.maxX, w.box.minX - box.maxX, box.minY - w.box.maxY, w.box.minY - box.maxY);
+      if (gap > search) continue;
+      pairs++;
+      let d = Infinity;
+      if (inRing(flaw[0], w.outer) && !w.holes.some((h) => inRing(flaw[0], h))) d = 0;
+      else if (inRing(w.outer[0], flaw)) d = 0;
+      else for (const [p, q] of w.edges) for (const [r, s] of edges) d = Math.min(d, segDist(p, q, r, s));
+      min = Math.min(min, d);
+      if (d < kerf - tolerance) problems.push(`'${w.piece.name}' is ${d.toFixed(3)} mm from flaw ${k + 1}`);
+    }
+  });
+
   return {
     valid: problems.length === 0,
+    defects_checked: defects.length,
     verifier: "independent TypeScript exact geometry check",
     pieces_checked: placed.length,
     pairs_checked: pairs,

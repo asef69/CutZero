@@ -14,6 +14,7 @@
 #include <fstream>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "fft2d.hpp"
@@ -276,6 +277,41 @@ int main(int argc, char** argv) {
         if (require_gain > 0.0) {
             CHECK(eta_opt - eta_base >= require_gain, "%s gain %.2f < required %.2f", id, eta_opt - eta_base,
                   require_gain);
+        }
+    }
+
+    // Fabric flaws: the shirt again with three 60 mm defects on the roll. Both layouts must keep
+    // every part a full kerf clear of every flaw, and still contain every part.
+    if (only.empty() || only == "mens_dress_shirt") {
+        Dataset data;
+        if (load_dataset(dir + "/mens_dress_shirt.txt", data)) {
+            SolverConfig cfg;
+            cfg.roll_width_mm = data.width;
+            cfg.kerf_mm = data.kerf;
+            cfg.allowed_rotations_deg = data.rotations;
+            cfg.max_iterations = iters;
+            cfg.threads = threads;
+            cfg.seed = seed;
+            cfg.grid_rows = rows;
+            for (const auto& [cx, cy] : {std::pair{420.0, 310.0}, std::pair{1150.0, 900.0}, std::pair{1800.0, 520.0}}) {
+                Polygon2D flaw;
+                for (int k = 0; k < 24; ++k) {
+                    const double a = 2.0 * 3.14159265358979 * k / 24.0;
+                    flaw.outer.push_back({cx + 30.0 * std::cos(a), cy + 30.0 * std::sin(a)});
+                }
+                cfg.defects.push_back(flaw);
+            }
+            NestingProblem problem(data.pieces, data.width, data.kerf, data.rotations, cfg.defects);
+            const SolveResult r = SimulatedAnnealingSolver(cfg).solve(problem, nullptr);
+            const double area = problem.total_area_mm2();
+            std::printf("\nwith 3 fabric flaws: baseline %.1f mm (%.2f%%), CutZero %.1f mm (%.2f%%), min clearance %.3f mm\n",
+                        r.baseline.length_mm, 100.0 * area / (data.width * r.baseline.length_mm), r.optimized.length_mm,
+                        100.0 * area / (data.width * r.optimized.length_mm), r.optimized_validation.min_clearance_mm);
+            CHECK(problem.obstacles().size() == 3, "expected 3 obstacles");
+            CHECK(r.baseline_validation.valid, "baseline touches a flaw (%d violations)", r.baseline_validation.violations);
+            CHECK(r.optimized_validation.valid, "optimized touches a flaw (%d violations)", r.optimized_validation.violations);
+            CHECK(r.optimized.placed.size() == data.pieces.size(), "defect run lost pieces");
+            if (!svg_dir.empty()) write_svg(svg_dir + "/mens_dress_shirt_defects.svg", problem, r.optimized);
         }
     }
 
