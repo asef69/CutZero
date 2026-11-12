@@ -34,7 +34,7 @@ Industry baseline vs. CutZero, 100-lay batch, kerf 2 mm, 200 iterations, seed 42
 
 With `--iterations 1000` the shirt reaches **79.9%** (+19.4 points) in about 8 s. Minimum part-to-part gap in every layout: 2.001 to 2.002 mm against a 2 mm kerf.
 
-**With fabric flaws.** The test bench also nests the shirt around three 60 mm flaws: the baseline needs 3,990.9 mm (50.5%) and CutZero 2,837.2 mm (71.0%), with every part at least 2.002 mm from every flaw.
+**With fabric flaws.** The test bench also nests the shirt around three 60 mm flaws: the baseline needs 3,991 mm (50.5%) and CutZero about 2,837 mm (71.0%), with every part at least 2.002 mm from every flaw.
 
 **What the comparison is, and isn't.** The baseline is the best of nine First-Fit Decreasing shelf-packing variants on bounding boxes (three rotation policies × three sort orders), under the same kerf and rotation rules. It represents simple nesting and manual box-style layouts. Commercial marker software (Lectra, Gerber, SigmaNEST) will do better than this baseline, so these gains do not measure CutZero against those products. The garment presets lock rotation to 0/180°, as real cutting rooms do to respect the fabric grain.
 
