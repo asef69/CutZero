@@ -34,3 +34,32 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - working-directory: frontend
         run: npm ci && npm run build
+
+  docker:
+    # Builds the judges' image exactly as `docker compose up --build` does, then drives it end to end.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and start the app + PostgreSQL
+        run: docker compose up --build -d
+      - name: Image size
+        run: docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -i cutzero
+      - name: End-to-end smoke test (studio, engine, WebSocket run, exports, history)
+        run: |
+          pip install --quiet websockets
+          python scripts/docker_smoke.py http://localhost:8000
+      - name: Run history survives an app restart (stored in PostgreSQL)
+        run: |
+          docker compose restart app
+          for i in $(seq 60); do curl -sf http://localhost:8000/api/health >/dev/null && break; sleep 2; done
+          curl -sf http://localhost:8000/api/jobs | python -c "import json,sys; a=json.load(sys.stdin)['aggregate']; print(a); assert a['runs'] >= 1 and a['backend'] == 'postgresql'"
+          docker compose exec -T db psql -U cutzero -d cutzero -c "select count(*) as saved_runs from jobs;"
+      - name: Container logs
+        if: always()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v
