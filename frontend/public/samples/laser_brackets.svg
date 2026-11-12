@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600mm" height="400mm" viewBox="0 0 600 400">
+  <title>CutZero sample: curved brackets for a laser cutter</title>
+  <path id="Crescent bracket" d="M 20 20 C 180 20 260 110 260 240 L 200 240 C 200 140 130 90 20 90 Z"/>
+  <path id="Crescent bracket mirrored" d="M 280 20 C 440 20 520 110 520 240 L 460 240 C 460 140 390 90 280 90 Z"/>
+  <path id="Ring gasket" fill-rule="evenodd" d="M 120 300 a 80 80 0 1 0 160 0 a 80 80 0 1 0 -160 0 Z M 160 300 a 40 40 0 1 0 80 0 a 40 40 0 1 0 -80 0 Z"/>
+  <path id="Wave strip" d="M 300 280 q 40 -40 80 0 t 80 0 t 80 0 l 0 40 q -40 40 -80 0 t -80 0 t -80 0 Z"/>
+  <polygon id="Chevron" points="20,300 80,270 140,300 140,360 80,330 20,360"/>
+  <rect id="Mounting tab" x="540" y="30" width="46" height="150" rx="10"/>
+  <circle id="Washer" cx="560" cy="350" r="28"/>
+</svg>

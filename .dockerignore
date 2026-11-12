@@ -1,0 +1,11 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend/dist
+cpp_engine/build
+backend/app/_cutzero_core*
+backend/cutzero.db
+.git
+.claude

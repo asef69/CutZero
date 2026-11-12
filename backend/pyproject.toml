@@ -1,0 +1,30 @@
+[project]
+name = "cutzero-backend"
+version = "1.0.0"
+description = "FastAPI backend for the CutZero nesting engine"
+requires-python = ">=3.12"
+dependencies = [
+    "defusedxml>=0.7.1",
+    "fastapi>=0.115",
+    "python-multipart>=0.0.20",
+    "sqlalchemy>=2.0.36",
+    "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]
+
+[dependency-groups]
+dev = [
+    "cmake>=3.28",
+    "httpx>=0.27",
+    "pybind11>=2.13",
+    "pytest>=8.3",
+    "ziglang>=0.13",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

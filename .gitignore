@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+backend/cutzero.db
+backend/app/_cutzero_core*.pyd
+backend/app/_cutzero_core*.so
+
+# C++
+cpp_engine/build/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Local
+.env
+.claude/
+.vscode/

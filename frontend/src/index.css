@@ -1,0 +1,59 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: #070b10;
+  color: #e6ecf2;
+  font-family: "Inter Variable", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #71849a;
+  font-weight: 600;
+}
+
+.panel {
+  background: #0b1118;
+  border: 1px solid #1d2a37;
+  border-radius: 10px;
+}
+
+:focus-visible {
+  outline: 2px solid #2fd6a0;
+  outline-offset: 2px;
+}
+
+input[type="range"] {
+  accent-color: #2fd6a0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
