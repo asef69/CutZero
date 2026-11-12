@@ -2,6 +2,7 @@
 
 **Track:** Theme Track, Rethinking Waste
 **Repository:** https://github.com/asef69/CutZero
+**Live demo:** https://asef69.github.io/CutZero/ (runs the engine in your browser via WebAssembly; no install)
 **Demo video:** https://youtu.be/81FVRXn1VXo (2:34)
 
 ---
